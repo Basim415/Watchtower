@@ -1,4 +1,4 @@
-# Mini SIEM Project
+# Watchtower SIEM Project
 
 This project is a lightweight security information and event management (SIEM) system. It ingests logs, normalizes events, applies detection rules, and displays alerts inside a Tkinter GUI.
 
