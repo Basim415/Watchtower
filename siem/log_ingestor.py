@@ -3,8 +3,14 @@ import os
 from pathlib import Path
 from typing import Iterator, Tuple, List, Dict
 
+from .rule_engine import RuleEngine
+
 # Folder where logs live: Watchtower/data/logs
 LOG_DIR = Path(os.path.dirname(os.path.dirname(__file__))) / "data" / "logs"
+
+# Folder where YAML rules live: Watchtower/rules
+BASE_DIR = Path(os.path.dirname(os.path.dirname(__file__)))
+RULE_DIR = BASE_DIR / "rules"
 
 # Map filenames to a logical source key
 SUPPORTED_SOURCES: Dict[str, str] = {
@@ -52,8 +58,36 @@ def ingest_all_logs() -> Iterator[Tuple[str, str]]:
 
 
 if __name__ == "__main__":
-    # Tiny manual test
+    # Manual test with rule engine
     print(f"LOG_DIR is: {LOG_DIR}")
     print("Existing files:", [p.name for p in get_log_files()])
+    print(f"RULE_DIR is: {RULE_DIR}")
+
+    # Create and load rules
+    rule_engine = RuleEngine(rule_dir=RULE_DIR)
+    rule_engine.load_rules()
+    print(f"Loaded {len(rule_engine.rules)} rules")
+
+    seen_sources = set()
+
+    # Walk through all logs, print lines, and check for alerts
     for source, raw in ingest_all_logs():
+        if source not in seen_sources:
+            print(f"[{source}] # sample log")
+            seen_sources.add(source)
+
         print(f"[{source}] {raw}")
+
+        # Minimal event dict for the rule engine
+        event = {
+            "log_type": source,
+            "raw": raw,
+        }
+
+        alerts = rule_engine.match_event(event)
+        for alert in alerts:
+            print("\n=== ALERT DETECTED ===")
+            print(f"Rule: {alert['rule_id']}")
+            print(f"Description: {alert['description']}")
+            print(f"Severity: {alert['severity']}")
+            print(f"Event: {alert['event']['raw']}")

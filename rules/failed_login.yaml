@@ -1,0 +1,7 @@
+# rule file
+id: FAILED_LOGIN_DETECT
+description: Detect failed SSH login attempts
+log_type: auth
+match_type: contains
+pattern: "Failed password"
+severity: high

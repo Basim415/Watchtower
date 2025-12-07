@@ -1,1 +1,6 @@
-# rule file
+id: PORT_SCAN_SIMPLE
+description: Detect basic nmap style scans in web logs
+log_type: web
+match_type: contains
+pattern: "nmap"
+severity: medium

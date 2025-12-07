@@ -1,1 +1,6 @@
-# rule file
+id: ROOT_LOGIN_DETECT
+description: Detect successful SSH login as root
+log_type: auth
+match_type: contains
+pattern: "Accepted password for root"
+severity: medium
