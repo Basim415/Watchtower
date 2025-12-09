@@ -4,29 +4,31 @@ import tkinter as tk
 from tkinter import ttk
 import threading
 import time
+from datetime import datetime, timezone
 
 from siem.log_ingestor import ingest_all_logs, LOG_DIR, RULE_DIR
 from siem.rule_engine import RuleEngine
+from siem.storage import SQLiteStorage
+from siem.models import Alert
 
 
 class WatchtowerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Watchtower SIEM")
-        self.geometry("950x550")
+        self.geometry("950x580")
 
         # Monitoring state
         self.monitoring = False
         self.monitor_thread = None
 
-        # Global dark style
+        # Dark style for Treeview
         style = ttk.Style(self)
         try:
             style.theme_use("clam")
         except tk.TclError:
-            pass  # fall back to default if clam is not available
+            pass
 
-        # Dark background for tree and headings
         style.configure(
             "Treeview",
             background="#1e1e1e",
@@ -51,7 +53,12 @@ class WatchtowerApp(tk.Tk):
         self.rule_engine = RuleEngine(rule_dir=RULE_DIR)
         self.rule_engine.load_rules()
 
-        # Top section
+        # SQLite storage
+        self.storage = SQLiteStorage()
+        self.storage.connect()
+        self.storage.init_db()
+
+        # Top section - info and refresh slider
         top = ttk.Frame(self, padding=10)
         top.pack(side=tk.TOP, fill=tk.X)
 
@@ -61,18 +68,20 @@ class WatchtowerApp(tk.Tk):
         )
         self.info_label.pack(side=tk.LEFT)
 
-        # Slider for refresh interval
         slider_frame = ttk.Frame(top)
         slider_frame.pack(side=tk.RIGHT, padx=10)
 
         ttk.Label(slider_frame, text="Refresh (sec)").pack()
         self.refresh_slider = ttk.Scale(
-            slider_frame, from_=1, to=10, orient=tk.HORIZONTAL
+            slider_frame,
+            from_=1,
+            to=10,
+            orient=tk.HORIZONTAL,
         )
         self.refresh_slider.set(3)
         self.refresh_slider.pack()
 
-        # Control buttons
+        # Button row
         btn_frame = ttk.Frame(self, padding=10)
         btn_frame.pack(side=tk.TOP, fill=tk.X)
 
@@ -91,6 +100,24 @@ class WatchtowerApp(tk.Tk):
         self.clear_btn = ttk.Button(
             btn_frame, text="Clear Alerts", command=self.clear_table)
         self.clear_btn.pack(side=tk.LEFT, padx=5)
+
+        # Filter controls that read from SQLite
+        filter_frame = ttk.Frame(self, padding=(10, 0))
+        filter_frame.pack(side=tk.TOP, fill=tk.X)
+
+        ttk.Label(filter_frame, text="Severity (from DB):").pack(side=tk.LEFT)
+        self.severity_filter = ttk.Combobox(
+            filter_frame,
+            values=["", "low", "medium", "high"],
+            width=10,
+            state="readonly",
+        )
+        self.severity_filter.set("")
+        self.severity_filter.pack(side=tk.LEFT, padx=(0, 10))
+
+        load_btn = ttk.Button(
+            filter_frame, text="Load Stored Alerts", command=self.load_alerts_from_db)
+        load_btn.pack(side=tk.LEFT)
 
         # Table section
         table_frame = ttk.Frame(self, padding=10)
@@ -115,20 +142,20 @@ class WatchtowerApp(tk.Tk):
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.configure(yscrollcommand=scroll.set)
 
-        # Severity tag styles for dark mode
+        # Severity tag styles for dark mode (subtle)
         self.tree.tag_configure(
             "high",
-            background="#5c1a1a",      # dark red
-            foreground="#ffd6d6",
+            background="#3a2020",
+            foreground="#ffb3b3",
         )
         self.tree.tag_configure(
             "medium",
-            background="#5c4a1a",      # dark amber
+            background="#3a321f",
             foreground="#ffe9a6",
         )
         self.tree.tag_configure(
             "low",
-            background="#1a5c33",      # dark green
+            background="#1f3a29",
             foreground="#b3ffd9",
         )
 
@@ -139,14 +166,16 @@ class WatchtowerApp(tk.Tk):
         self.status_label = ttk.Label(bottom, text="Ready")
         self.status_label.pack(side=tk.LEFT)
 
+    # -------------- helper methods --------------
+
     def clear_table(self):
         for row in self.tree.get_children():
             self.tree.delete(row)
         self.status_label.config(text="Alerts cleared.")
 
     def run_analysis(self):
-        """Single run for manual analysis."""
-        self.status_label.config(text="Running analysis...")
+        """Single run based on current logs."""
+        self.status_label.config(text="Running analysis once...")
         self.update_idletasks()
 
         self.rule_engine.load_rules()
@@ -156,12 +185,11 @@ class WatchtowerApp(tk.Tk):
 
         self.clear_table()
         alert_count = self.process_logs_once()
-
         self.status_label.config(
             text=f"Analysis complete, {alert_count} alert(s) found.")
 
-    def process_logs_once(self):
-        """Processes logs once and populates the table."""
+    def process_logs_once(self) -> int:
+        """Read logs one time, populate table, and write alerts to DB."""
         count = 0
 
         for source, raw in ingest_all_logs():
@@ -171,10 +199,10 @@ class WatchtowerApp(tk.Tk):
             for alert in alerts:
                 count += 1
 
-                sev = str(alert.get("severity", "")).lower()
-                if sev == "high":
+                sev_value = str(alert.get("severity", "")).lower()
+                if sev_value == "high":
                     tags = ("high",)
-                elif sev == "medium":
+                elif sev_value == "medium":
                     tags = ("medium",)
                 else:
                     tags = ("low",)
@@ -192,7 +220,61 @@ class WatchtowerApp(tk.Tk):
                     tags=tags,
                 )
 
+                # Save alert to SQLite using your Alert model
+                alert_obj = Alert(
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    rule_name=alert.get("rule_id") or "",
+                    severity=alert.get("severity") or "",
+                    src_ip="",       # you can fill this in once parsers extract IPs
+                    user="",
+                    message=alert["event"].get("raw", ""),
+                )
+                self.storage.insert_alert(alert_obj)
+
         return count
+
+    def load_alerts_from_db(self):
+        """Load stored alerts from SQLite based on severity filter."""
+        sev = self.severity_filter.get().strip() or None
+        alerts = self.storage.fetch_alerts(severity=sev, limit=500)
+
+        self.clear_table()
+        count = 0
+
+        for a in alerts:
+            count += 1
+            sev_value = str(a["severity"]).lower()
+            if sev_value == "high":
+                tags = ("high",)
+            elif sev_value == "medium":
+                tags = ("medium",)
+            else:
+                tags = ("low",)
+
+            # We do not have source stored, so show n/a for now
+            self.tree.insert(
+                "",
+                tk.END,
+                values=(
+                    "n/a",
+                    a["rule_name"],
+                    a["severity"],
+                    a["message"],
+                    a["message"],
+                ),
+                tags=tags,
+            )
+
+        if sev:
+            self.status_label.config(
+                text=f"Loaded {count} stored alert(s) from DB with severity = {sev}."
+            )
+        else:
+            self.status_label.config(
+                text=f"Loaded {count} stored alert(s) from DB (all severities)."
+            )
+
+    # -------------- monitoring loop --------------
 
     def start_monitoring(self):
         if self.monitoring:
