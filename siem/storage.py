@@ -146,6 +146,39 @@ class SQLiteStorage:
             )
         return results
 
+    def fetch_events(self, limit: int = 500) -> List[Dict]:
+        """
+        Return recent events for the Events tab.
+        Matches fields from the Event model.
+        """
+        assert self.conn is not None
+        cur = self.conn.cursor()
+
+        cur.execute(
+            """
+            SELECT timestamp, source, raw, action, user, src_ip
+            FROM events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
+        rows = cur.fetchall()
+        results: List[Dict] = []
+        for row in rows:
+            results.append(
+                {
+                    "timestamp": row["timestamp"],
+                    "source": row["source"],
+                    "raw": row["raw"],
+                    "action": row["action"],
+                    "user": row["user"],
+                    "src_ip": row["src_ip"],
+                }
+            )
+        return results
+
 
 # TEST BLOCK
 if __name__ == "__main__":

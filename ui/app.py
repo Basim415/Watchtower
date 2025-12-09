@@ -10,6 +10,7 @@ from siem.log_ingestor import ingest_all_logs, LOG_DIR, RULE_DIR
 from siem.rule_engine import RuleEngine
 from siem.storage import SQLiteStorage
 from siem.models import Alert
+from siem.parsers import parse_event
 
 
 class WatchtowerApp(tk.Tk):
@@ -189,11 +190,27 @@ class WatchtowerApp(tk.Tk):
             text=f"Analysis complete, {alert_count} alert(s) found.")
 
     def process_logs_once(self) -> int:
-        """Read logs one time, populate table, and write alerts to DB."""
         count = 0
 
         for source, raw in ingest_all_logs():
-            event = {"log_type": source, "raw": raw}
+            # Use your existing parser to build an Event
+            ev = parse_event(source, raw)
+            if ev is None:
+                continue
+
+            # Optionally store the raw event in the events table
+            self.storage.insert_event(ev)
+
+            # Build the event dict that RuleEngine expects, plus extra fields
+            event = {
+                "log_type": ev.source,
+                "raw": ev.raw,
+                "user": getattr(ev, "user", ""),
+                "src_ip": getattr(ev, "src_ip", ""),
+                "action": getattr(ev, "action", ""),
+                "timestamp": ev.timestamp,
+            }
+
             alerts = self.rule_engine.match_event(event)
 
             for alert in alerts:
@@ -207,27 +224,28 @@ class WatchtowerApp(tk.Tk):
                 else:
                     tags = ("low",)
 
+                # Show enriched info in the table (source and raw message for now)
                 self.tree.insert(
                     "",
                     tk.END,
                     values=(
-                        source,
+                        ev.source,
                         alert.get("rule_id"),
                         alert.get("severity"),
                         alert.get("description"),
-                        alert["event"].get("raw", ""),
+                        ev.raw,
                     ),
                     tags=tags,
                 )
 
-                # Save alert to SQLite using your Alert model
+                # Save alert to SQLite using your Alert model and enriched fields
                 alert_obj = Alert(
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    timestamp=ev.timestamp,
                     rule_name=alert.get("rule_id") or "",
                     severity=alert.get("severity") or "",
-                    src_ip="",       # you can fill this in once parsers extract IPs
-                    user="",
-                    message=alert["event"].get("raw", ""),
+                    src_ip=ev.src_ip or "",
+                    user=ev.user or "",
+                    message=ev.raw,
                 )
                 self.storage.insert_alert(alert_obj)
 
